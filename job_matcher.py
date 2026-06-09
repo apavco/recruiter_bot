@@ -11,9 +11,36 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 HEADERS = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
 
 
+COLUMN_MAP = {
+    "job": ["job", "job_title", "title", "position", "role", "job_name"],
+    "location": ["location", "loc", "city", "region"],
+    "security_clearance": ["security_clearance", "clearance", "security"],
+    "required_skills": ["required_skills", "required", "skills", "must_have"],
+    "ideal_skills": ["ideal_skills", "ideal", "preferred_skills", "nice_to_have"],
+}
+
+
 def load_jobs(excel_path):
     df = pd.read_excel(excel_path)
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+
+    # Remap columns to standard names
+    rename = {}
+    for standard, candidates in COLUMN_MAP.items():
+        if standard not in df.columns:
+            for candidate in candidates:
+                if candidate in df.columns:
+                    rename[candidate] = standard
+                    break
+
+    if rename:
+        df = df.rename(columns=rename)
+
+    if "job" not in df.columns:
+        print(f"\nCould not find a job title column. Columns found: {list(df.columns)}")
+        col = input("Enter the column name to use as the job title: ").strip().lower().replace(" ", "_")
+        df = df.rename(columns={col: "job"})
+
     return df
 
 
