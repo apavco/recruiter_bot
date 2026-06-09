@@ -62,24 +62,47 @@ def parse_skills(skills_str):
 
 
 def search_github_users(required_skills, location=None, max_results=30):
-    # Use top 5 skills as search terms to keep the query focused
-    skill_query = " ".join(required_skills[:5])
-    query = skill_query
-    if location and location.lower() not in ["remote", "n/a", "", "various"]:
-        query += f" location:{location}"
-
     url = "https://api.github.com/search/users"
-    params = {"q": query, "per_page": min(max_results, 30), "sort": "repositories"}
 
-    resp = requests.get(url, headers=HEADERS, params=params)
-    if resp.status_code == 403:
-        print("GitHub rate limit hit. Add a GITHUB_TOKEN env var for higher limits.")
-        return []
-    if resp.status_code != 200:
-        print(f"GitHub search error: {resp.status_code} — {resp.json().get('message', '')}")
-        return []
+    # Try progressively broader queries until we get results
+    queries = []
 
-    return resp.json().get("items", [])
+    # Query 1: top 3 skills + location
+    skill_query = " ".join(required_skills[:3])
+    if location and location.lower() not in ["remote", "n/a", "", "various"]:
+        queries.append(f"{skill_query} location:{location}")
+
+    # Query 2: top 3 skills only
+    queries.append(skill_query)
+
+    # Query 3: single top skill only
+    if required_skills:
+        queries.append(required_skills[0])
+
+    for query in queries:
+        print(f"  Trying query: {query}")
+        params = {"q": query, "per_page": min(max_results, 30), "sort": "repositories"}
+        resp = requests.get(url, headers=HEADERS, params=params)
+
+        if resp.status_code == 403:
+            msg = resp.json().get("message", "")
+            print(f"GitHub rate limit hit: {msg}")
+            print("Set a free GITHUB_TOKEN env var to get 5000 requests/hr:")
+            print("  1. Go to https://github.com/settings/tokens")
+            print("  2. Generate new token (no scopes needed)")
+            print("  3. Run: $env:GITHUB_TOKEN = 'your_token'")
+            return []
+        if resp.status_code != 200:
+            print(f"GitHub search error: {resp.status_code} — {resp.json().get('message', '')}")
+            continue
+
+        items = resp.json().get("items", [])
+        print(f"  Found {len(items)} results.")
+        if items:
+            return items
+        time.sleep(1)
+
+    return []
 
 
 def get_user_profile(username):
