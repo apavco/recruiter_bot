@@ -5,12 +5,20 @@ import re
 import os
 from pathlib import Path
 
-# Get a free token at https://github.com/settings/tokens (no scopes needed)
-# Set it as an env var: $env:GITHUB_TOKEN = "your_token"
+# ── API credentials (all free) ────────────────────────────────────────────────
+# GitHub:  https://github.com/settings/tokens  (no scopes needed)
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
-HEADERS = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
+# Google:  https://console.cloud.google.com → enable Custom Search API → create key
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+# Google:  https://programmablesearchengine.google.com → create engine → get ID
+GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID", "")
+# Stack Overflow: https://stackapps.com/apps/oauth/register (optional, raises daily limit)
+STACKOVERFLOW_KEY = os.getenv("STACKOVERFLOW_KEY", "")
+
+GITHUB_HEADERS = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
 
 
+# ── Column name normalization ─────────────────────────────────────────────────
 COLUMN_MAP = {
     "job": ["job", "job_title", "title", "position", "role", "job_name"],
     "location": ["location", "loc", "city", "region"],
@@ -24,7 +32,6 @@ def load_jobs(excel_path):
     df = pd.read_excel(excel_path)
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-    # Remap columns to standard names
     rename = {}
     for standard, candidates in COLUMN_MAP.items():
         if standard not in df.columns:
@@ -61,59 +68,71 @@ def parse_skills(skills_str):
     return [s.strip().lower() for s in re.split(r"[,;/]+", str(skills_str)) if s.strip()]
 
 
-def search_github_users(required_skills, location=None, max_results=30):
+# ── GitHub ────────────────────────────────────────────────────────────────────
+def search_github(required_skills, location=None, max_results=20):
+    print("\n[GitHub] Searching...")
     url = "https://api.github.com/search/users"
 
-    # Try progressively broader queries until we get results
     queries = []
-
-    # Query 1: top 3 skills + location
     skill_query = " ".join(required_skills[:3])
     if location and location.lower() not in ["remote", "n/a", "", "various"]:
         queries.append(f"{skill_query} location:{location}")
-
-    # Query 2: top 3 skills only
     queries.append(skill_query)
-
-    # Query 3: single top skill only
     if required_skills:
         queries.append(required_skills[0])
 
     for query in queries:
-        print(f"  Trying query: {query}")
-        params = {"q": query, "per_page": min(max_results, 30), "sort": "repositories"}
-        resp = requests.get(url, headers=HEADERS, params=params)
+        print(f"  Query: {query}")
+        resp = requests.get(url, headers=GITHUB_HEADERS, params={"q": query, "per_page": min(max_results, 30), "sort": "repositories"})
 
         if resp.status_code == 403:
-            msg = resp.json().get("message", "")
-            print(f"GitHub rate limit hit: {msg}")
-            print("Set a free GITHUB_TOKEN env var to get 5000 requests/hr:")
-            print("  1. Go to https://github.com/settings/tokens")
-            print("  2. Generate new token (no scopes needed)")
-            print("  3. Run: $env:GITHUB_TOKEN = 'your_token'")
+            print("  Rate limit hit. Set GITHUB_TOKEN env var for 5000 req/hr.")
             return []
         if resp.status_code != 200:
-            print(f"GitHub search error: {resp.status_code} — {resp.json().get('message', '')}")
+            print(f"  Error {resp.status_code}: {resp.json().get('message', '')}")
             continue
 
         items = resp.json().get("items", [])
-        print(f"  Found {len(items)} results.")
-        if items:
-            return items
-        time.sleep(1)
+        print(f"  Found {len(items)} users.")
+        if not items:
+            time.sleep(1)
+            continue
+
+        candidates = []
+        for user in items:
+            username = user["login"]
+            profile = _github_profile(username)
+            skills = _github_skills(username)
+            bio_words = set(re.split(r"\W+", str(profile.get("bio") or "").lower()))
+            all_skills = (skills | bio_words) - {""}
+
+            candidates.append({
+                "source": "GitHub",
+                "username": username,
+                "name": profile.get("name", ""),
+                "location": profile.get("location", ""),
+                "profile_url": f"https://github.com/{username}",
+                "bio": profile.get("bio", ""),
+                "skills": all_skills,
+                "repos": profile.get("public_repos", 0),
+                "followers": profile.get("followers", 0),
+            })
+            time.sleep(0.1)
+
+        return candidates
 
     return []
 
 
-def get_user_profile(username):
-    resp = requests.get(f"https://api.github.com/users/{username}", headers=HEADERS)
+def _github_profile(username):
+    resp = requests.get(f"https://api.github.com/users/{username}", headers=GITHUB_HEADERS)
     return resp.json() if resp.status_code == 200 else {}
 
 
-def get_user_skills(username):
+def _github_skills(username):
     resp = requests.get(
         f"https://api.github.com/users/{username}/repos",
-        headers=HEADERS,
+        headers=GITHUB_HEADERS,
         params={"per_page": 50, "sort": "updated"},
     )
     if resp.status_code != 200:
@@ -125,13 +144,131 @@ def get_user_skills(username):
             skills.add(repo["language"].lower())
         for topic in repo.get("topics", []):
             skills.add(topic.lower())
-        desc = str(repo.get("description") or "").lower()
-        skills.update(re.split(r"\W+", desc))
+        skills.update(re.split(r"\W+", str(repo.get("description") or "").lower()))
 
-    skills.discard("")
-    return skills
+    return skills - {""}
 
 
+# ── Stack Overflow ────────────────────────────────────────────────────────────
+def search_stackoverflow(required_skills, max_results=20):
+    print("\n[Stack Overflow] Searching...")
+    so_params = {"site": "stackoverflow", "pagesize": 10}
+    if STACKOVERFLOW_KEY:
+        so_params["key"] = STACKOVERFLOW_KEY
+
+    user_ids = []
+    for skill in required_skills[:3]:
+        tag = re.sub(r"[^a-z0-9\-#\+]", "", skill.replace(" ", "-").replace(".", ""))
+        url = f"https://api.stackexchange.com/2.3/tags/{tag}/top-answerers/all_time"
+        print(f"  Tag: {tag}")
+        resp = requests.get(url, params=so_params)
+        if resp.status_code != 200:
+            continue
+        data = resp.json()
+        if data.get("error_id"):
+            print(f"  Tag '{tag}' not found on Stack Overflow.")
+            continue
+        for item in data.get("items", []):
+            uid = item.get("user", {}).get("user_id")
+            if uid and uid not in user_ids:
+                user_ids.append(uid)
+        time.sleep(0.2)
+
+    if not user_ids:
+        print("  No Stack Overflow users found.")
+        return []
+
+    print(f"  Found {len(user_ids)} users. Fetching profiles...")
+
+    candidates = []
+    for i in range(0, min(len(user_ids), max_results), 10):
+        batch = user_ids[i:i + 10]
+        ids_str = ";".join(str(uid) for uid in batch)
+        resp = requests.get(f"https://api.stackexchange.com/2.3/users/{ids_str}", params=so_params)
+        if resp.status_code != 200:
+            continue
+
+        for user in resp.json().get("items", []):
+            uid = user["user_id"]
+            tags_resp = requests.get(
+                f"https://api.stackexchange.com/2.3/users/{uid}/top-tags",
+                params={**so_params, "pagesize": 15},
+            )
+            user_tags = set()
+            if tags_resp.status_code == 200:
+                for tag in tags_resp.json().get("items", []):
+                    user_tags.add(tag["tag_name"].lower())
+            time.sleep(0.1)
+
+            candidates.append({
+                "source": "Stack Overflow",
+                "username": user.get("display_name", ""),
+                "name": user.get("display_name", ""),
+                "location": user.get("location", ""),
+                "profile_url": user.get("link", ""),
+                "bio": f"Reputation: {user.get('reputation', 0)}",
+                "skills": user_tags,
+                "repos": user.get("reputation", 0),
+                "followers": 0,
+            })
+
+    print(f"  Retrieved {len(candidates)} profiles.")
+    return candidates
+
+
+# ── Google Custom Search → LinkedIn ──────────────────────────────────────────
+def search_google_linkedin(required_skills, location=None, max_results=10):
+    if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
+        print("\n[Google/LinkedIn] Skipped — GOOGLE_API_KEY or GOOGLE_CSE_ID not set.")
+        print("  Setup guide:")
+        print("    1. https://console.cloud.google.com → Enable 'Custom Search API' → Create API key")
+        print("    2. https://programmablesearchengine.google.com → New engine → search the web → get ID")
+        print("    3. $env:GOOGLE_API_KEY = 'your_key'")
+        print("    4. $env:GOOGLE_CSE_ID  = 'your_engine_id'")
+        return []
+
+    print("\n[Google/LinkedIn] Searching...")
+    skill_query = " ".join(f'"{s}"' for s in required_skills[:3])
+    query = f"site:linkedin.com/in {skill_query}"
+    if location and location.lower() not in ["remote", "n/a", "", "various"]:
+        query += f' "{location}"'
+
+    print(f"  Query: {query}")
+    resp = requests.get(
+        "https://www.googleapis.com/customsearch/v1",
+        params={"key": GOOGLE_API_KEY, "cx": GOOGLE_CSE_ID, "q": query, "num": min(max_results, 10)},
+    )
+    if resp.status_code != 200:
+        print(f"  Error {resp.status_code}: {resp.json().get('error', {}).get('message', '')}")
+        return []
+
+    items = resp.json().get("items", [])
+    print(f"  Found {len(items)} LinkedIn profiles.")
+
+    candidates = []
+    for item in items:
+        title = item.get("title", "")
+        snippet = item.get("snippet", "")
+        url = item.get("link", "")
+        name = title.split(" - ")[0].strip() if " - " in title else title
+        snippet_skills = set(re.split(r"\W+", snippet.lower())) - {""}
+
+        candidates.append({
+            "source": "LinkedIn (Google)",
+            "username": url.split("/in/")[-1].split("/")[0] if "/in/" in url else name,
+            "name": name,
+            "location": "",
+            "profile_url": url,
+            "bio": snippet,
+            "skills": snippet_skills,
+            "repos": 0,
+            "followers": 0,
+        })
+
+    return candidates
+
+
+# ── Scoring ───────────────────────────────────────────────────────────────────
 def skill_match(candidate_skills, job_skills):
     matched = []
     for skill in job_skills:
@@ -144,80 +281,40 @@ def skill_match(candidate_skills, job_skills):
     return matched
 
 
-def score_candidate(candidate_skills, required_skills, ideal_skills):
-    req_matched = skill_match(candidate_skills, required_skills)
-    ideal_matched = skill_match(candidate_skills, ideal_skills)
-
-    req_pct = round(len(req_matched) / len(required_skills) * 100, 1) if required_skills else 0
-    ideal_pct = round(len(ideal_matched) / len(ideal_skills) * 100, 1) if ideal_skills else 0
-    combined = round(req_pct * 0.7 + ideal_pct * 0.3, 1)
-
-    return {
-        "required_matched": ", ".join(req_matched),
-        "ideal_matched": ", ".join(ideal_matched),
-        "req_pct": req_pct,
-        "ideal_pct": ideal_pct,
-        "combined": combined,
-    }
-
-
-def find_candidates(job_row):
-    required_skills = parse_skills(job_row.get("required_skills", ""))
-    ideal_skills = parse_skills(job_row.get("ideal_skills", ""))
-    location = str(job_row.get("location", "") or "").strip()
-
-    print(f"\nRequired skills: {', '.join(required_skills)}")
-    print(f"Ideal skills:    {', '.join(ideal_skills)}")
-    print(f"\nSearching GitHub...")
-
-    users = search_github_users(required_skills, location)
-    if not users:
-        return []
-
-    print(f"Found {len(users)} candidates. Fetching profiles...\n")
-
+def score_candidates(candidates, required_skills, ideal_skills):
     results = []
-    for i, user in enumerate(users):
-        username = user["login"]
-        print(f"  [{i + 1}/{len(users)}] {username}")
-
-        profile = get_user_profile(username)
-        repo_skills = get_user_skills(username)
-
-        bio = str(profile.get("bio") or "").lower()
-        bio_words = set(re.split(r"\W+", bio))
-        candidate_skills = repo_skills | bio_words
-        candidate_skills.discard("")
-
-        scores = score_candidate(candidate_skills, required_skills, ideal_skills)
+    for c in candidates:
+        req_matched = skill_match(c["skills"], required_skills)
+        ideal_matched = skill_match(c["skills"], ideal_skills)
+        req_pct = round(len(req_matched) / len(required_skills) * 100, 1) if required_skills else 0
+        ideal_pct = round(len(ideal_matched) / len(ideal_skills) * 100, 1) if ideal_skills else 0
 
         results.append({
-            "Combined Score (%)": scores["combined"],
-            "% Required Match": scores["req_pct"],
-            "% Ideal Match": scores["ideal_pct"],
-            "GitHub Username": username,
-            "Name": profile.get("name", ""),
-            "Location": profile.get("location", ""),
+            "Combined Score (%)": round(req_pct * 0.7 + ideal_pct * 0.3, 1),
+            "% Required Match": req_pct,
+            "% Ideal Match": ideal_pct,
+            "Source": c["source"],
+            "Name": c["name"],
+            "Username": c["username"],
+            "Location": c.get("location", ""),
             "Security Clearance": "Unknown",
-            "Profile URL": f"https://github.com/{username}",
-            "Bio": profile.get("bio", ""),
-            "Required Skills Matched": scores["required_matched"],
-            "Ideal Skills Matched": scores["ideal_matched"],
-            "Public Repos": profile.get("public_repos", 0),
-            "Followers": profile.get("followers", 0),
+            "Profile URL": c["profile_url"],
+            "Bio / Summary": c.get("bio", ""),
+            "Required Skills Matched": ", ".join(req_matched),
+            "Ideal Skills Matched": ", ".join(ideal_matched),
+            "Public Repos / Reputation": c.get("repos", ""),
+            "Followers": c.get("followers", ""),
         })
-
-        time.sleep(0.1)
 
     return sorted(results, key=lambda x: x["Combined Score (%)"], reverse=True)
 
 
+# ── Output ────────────────────────────────────────────────────────────────────
 def output_excel(results, job_title):
     safe_title = re.sub(r"[^\w\s-]", "", job_title).strip().replace(" ", "_")
     filename = f"candidates_{safe_title}.xlsx"
 
     df = pd.DataFrame(results)
-
     with pd.ExcelWriter(filename, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Candidates")
         ws = writer.sheets["Candidates"]
@@ -229,6 +326,7 @@ def output_excel(results, job_title):
     return filename
 
 
+# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     excel_path = input("Path to job descriptions Excel file: ").strip().strip('"')
     if not Path(excel_path).exists():
@@ -239,17 +337,30 @@ def main():
     job = select_job(df)
     print(f"\nSelected: {job['job']}")
 
-    candidates = find_candidates(job)
+    required_skills = parse_skills(job.get("required_skills", ""))
+    ideal_skills = parse_skills(job.get("ideal_skills", ""))
+    location = str(job.get("location", "") or "").strip()
 
-    if not candidates:
-        print("No candidates found.")
+    print(f"\nRequired skills: {', '.join(required_skills)}")
+    print(f"Ideal skills:    {', '.join(ideal_skills)}")
+
+    all_candidates = []
+    all_candidates.extend(search_github(required_skills, location))
+    all_candidates.extend(search_stackoverflow(required_skills))
+    all_candidates.extend(search_google_linkedin(required_skills, location))
+
+    if not all_candidates:
+        print("\nNo candidates found across any source.")
         return
 
-    print(f"\nTop 5 candidates:")
-    for c in candidates[:5]:
-        print(f"  {c['GitHub Username']} ({c['Name'] or 'no name'}) — {c['Combined Score (%)']}% match")
+    print(f"\nTotal candidates: {len(all_candidates)} — scoring and ranking...")
+    results = score_candidates(all_candidates, required_skills, ideal_skills)
 
-    output_excel(candidates, job["job"])
+    print(f"\nTop 5 candidates:")
+    for c in results[:5]:
+        print(f"  [{c['Source']}] {c['Name'] or c['Username']} — {c['Combined Score (%)']}% match")
+
+    output_excel(results, job["job"])
 
 
 if __name__ == "__main__":
