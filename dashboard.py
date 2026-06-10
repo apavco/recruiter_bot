@@ -14,6 +14,12 @@ from skills_matcher import (
     parse_skills,
     save_config,
 )
+from web_sourcer import (
+    build_candidates_df,
+    search_github,
+    search_google_linkedin,
+    search_stackoverflow,
+)
 
 
 @st.cache_resource(show_spinner=False)
@@ -67,14 +73,49 @@ if jobs_source == "Upload a new file":
 st.header("2. Candidates / Skills")
 
 people_df = None
-people_upload = st.file_uploader("Upload candidates Excel file", type=["xlsx", "xls"], key="people")
+people_upload = st.file_uploader("Upload candidates Excel file (optional if using web sourcing)", type=["xlsx", "xls"], key="people")
 if people_upload:
     people_df = pd.read_excel(people_upload)
     people_df.columns = [c.strip().lower().replace(" ", "_") for c in people_df.columns]
     st.success(f"Loaded {len(people_df)} candidates.")
 
+# ── Web sourcing ──────────────────────────────────────────────────────────────
+st.header("3. Source Candidates from Web (optional)")
+
+use_web = st.toggle("Enable web sourcing")
+
+github_token, google_api_key, google_cx = "", "", ""
+use_github, use_stackoverflow, use_google = False, False, False
+
+if use_web:
+    st.caption("Select which sources to search. Results will be combined with any uploaded candidates.")
+
+    col_src1, col_src2, col_src3 = st.columns(3)
+    use_github = col_src1.checkbox("GitHub", value=True)
+    use_stackoverflow = col_src2.checkbox("Stack Overflow", value=True)
+    use_google = col_src3.checkbox("Google → LinkedIn")
+
+    if use_github:
+        github_token = st.text_input(
+            "GitHub token (optional — increases rate limit)",
+            type="password",
+            help="Get a free token at github.com/settings/tokens — no scopes needed.",
+        )
+
+    if use_google:
+        g1, g2 = st.columns(2)
+        google_api_key = g1.text_input(
+            "Google API key",
+            type="password",
+            help="Free at console.developers.google.com — enable Custom Search API.",
+        )
+        google_cx = g2.text_input(
+            "Custom Search Engine ID",
+            help="Create a free search engine at programmablesearchengine.google.com.",
+        )
+
 # ── Job selector ──────────────────────────────────────────────────────────────
-st.header("3. Select Job")
+st.header("4. Select Job")
 
 job_row = None
 job_col = None
@@ -90,7 +131,7 @@ if jobs_df is not None:
         job_row = jobs_df[jobs_df[job_col] == selected].iloc[0]
 
 # ── Search ────────────────────────────────────────────────────────────────────
-st.header("4. Search")
+st.header("5. Search")
 
 col_a, col_b = st.columns(2)
 threshold = col_a.slider(
@@ -110,7 +151,8 @@ similarity = col_b.slider(
     help="How closely a candidate skill must match a job skill. Lower = more lenient, higher = stricter.",
 )
 
-search_clicked = st.button("🔍 Search Candidates", type="primary", disabled=(jobs_df is None or people_df is None))
+can_search = jobs_df is not None and (people_df is not None or use_web)
+search_clicked = st.button("🔍 Search Candidates", type="primary", disabled=not can_search)
 
 if search_clicked:
     jobs_to_run = (
@@ -121,16 +163,56 @@ if search_clicked:
 
     for _, row in jobs_to_run:
         title = row[job_col]
-        results = match_people_to_job(row, job_col, people_df, threshold=similarity)
-        results_df = pd.DataFrame(results)
+        req_skills = parse_skills(row.get("required_skills", ""))
+        ideal_skills = parse_skills(row.get("ideal_skills", ""))
 
-        # Apply minimum threshold filter
+        sourced = []
+        if use_web:
+            if use_github:
+                with st.spinner("Searching GitHub..."):
+                    results, err = search_github(req_skills, github_token)
+                    if err:
+                        st.warning(f"GitHub: {err}")
+                    else:
+                        sourced.append(results)
+                        st.success(f"GitHub: found {len(results)} candidates")
+
+            if use_stackoverflow:
+                with st.spinner("Searching Stack Overflow..."):
+                    results, err = search_stackoverflow(req_skills)
+                    if err:
+                        st.warning(f"Stack Overflow: {err}")
+                    else:
+                        sourced.append(results)
+                        st.success(f"Stack Overflow: found {len(results)} candidates")
+
+            if use_google:
+                with st.spinner("Searching Google → LinkedIn..."):
+                    results, err = search_google_linkedin(req_skills, google_api_key, google_cx)
+                    if err:
+                        st.warning(f"Google: {err}")
+                    else:
+                        sourced.append(results)
+                        st.success(f"LinkedIn (Google): found {len(results)} candidates")
+
+        web_df = build_candidates_df(sourced) if sourced else pd.DataFrame()
+        if people_df is not None and not web_df.empty:
+            combined_df = pd.concat([people_df, web_df], ignore_index=True)
+        elif people_df is not None:
+            combined_df = people_df
+        else:
+            combined_df = web_df
+
+        if combined_df.empty:
+            st.warning("No candidates to score.")
+            continue
+
+        matched = match_people_to_job(row, job_col, combined_df, threshold=similarity)
+        results_df = pd.DataFrame(matched)
         results_df = results_df[results_df["% Required Match"] >= threshold].reset_index(drop=True)
 
         st.subheader(f"Results — {title}")
 
-        req_skills = parse_skills(row.get("required_skills", ""))
-        ideal_skills = parse_skills(row.get("ideal_skills", ""))
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Candidates shown", len(results_df))
         col2.metric("Required skills", len(req_skills))
@@ -139,7 +221,6 @@ if search_clicked:
 
         st.dataframe(results_df, use_container_width=True)
 
-        # Download button
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
             results_df.to_excel(writer, index=False, sheet_name="Ranked Candidates")
