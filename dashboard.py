@@ -98,21 +98,33 @@ if use_web:
     if use_github:
         github_token = st.text_input(
             "GitHub token (optional — increases rate limit)",
+            value=config.get("github_token", ""),
             type="password",
             help="Get a free token at github.com/settings/tokens — no scopes needed.",
         )
+        if github_token and github_token != config.get("github_token"):
+            config["github_token"] = github_token
+            save_config(config)
 
     if use_google:
         g1, g2 = st.columns(2)
         google_api_key = g1.text_input(
             "Google API key",
+            value=config.get("google_api_key", ""),
             type="password",
             help="Free at console.developers.google.com — enable Custom Search API.",
         )
         google_cx = g2.text_input(
             "Custom Search Engine ID",
+            value=config.get("google_cx", ""),
             help="Create a free search engine at programmablesearchengine.google.com.",
         )
+        if google_api_key and google_api_key != config.get("google_api_key"):
+            config["google_api_key"] = google_api_key
+            save_config(config)
+        if google_cx and google_cx != config.get("google_cx"):
+            config["google_cx"] = google_cx
+            save_config(config)
 
 # ── Job selector ──────────────────────────────────────────────────────────────
 st.header("4. Select Job")
