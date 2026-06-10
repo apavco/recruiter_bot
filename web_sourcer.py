@@ -6,16 +6,29 @@ import pandas as pd
 
 # ── GitHub ────────────────────────────────────────────────────────────────────
 
+def _clean_query_term(s):
+    return re.sub(r"[^\w\s]", "", s).strip()
+
+
 def search_github(skills, github_token="", max_results=30):
     headers = {"Authorization": f"token {github_token}"} if github_token else {}
-    query = " ".join(skills[:5])
+
+    # Clean each skill and drop empty terms to avoid 422
+    clean_skills = [_clean_query_term(s) for s in skills[:5]]
+    clean_skills = [s for s in clean_skills if s]
+    if not clean_skills:
+        return [], "No valid search terms after cleaning skill names."
+
+    query = " ".join(clean_skills)
     params = {"q": query, "per_page": min(max_results, 30), "sort": "repositories"}
 
     resp = requests.get("https://api.github.com/search/users", headers=headers, params=params)
     if resp.status_code == 403:
         return [], "GitHub rate limit hit — add a token for higher limits."
+    if resp.status_code == 422:
+        return [], f"GitHub rejected the query '{query}' — try simpler skill names."
     if resp.status_code != 200:
-        return [], f"GitHub error: {resp.status_code}"
+        return [], f"GitHub error {resp.status_code}: {resp.json().get('message', '')}"
 
     candidates = []
     for user in resp.json().get("items", []):
@@ -55,19 +68,47 @@ def search_github(skills, github_token="", max_results=30):
 
 # ── Stack Overflow ────────────────────────────────────────────────────────────
 
+def _skill_to_so_tag(skill):
+    # Normalize to Stack Overflow tag format
+    tag = skill.lower().strip()
+    tag = re.sub(r"[^\w\s\+\#]", "", tag)
+    tag = re.sub(r"\s+", "-", tag)
+    return tag
+
+
 def search_stackoverflow(skills, max_results=30):
     user_skills = {}
+    errors = []
 
     for skill in skills[:5]:
-        tag = skill.lower().replace(" ", "-").replace(".", "-")
+        tag = _skill_to_so_tag(skill)
         url = f"https://api.stackexchange.com/2.3/tags/{tag}/top-answerers/all_time"
         params = {"site": "stackoverflow", "pagesize": min(max_results, 30)}
 
         resp = requests.get(url, params=params)
-        if resp.status_code != 200:
-            continue
+        data = resp.json()
 
-        for item in resp.json().get("items", []):
+        if resp.status_code != 200 or not data.get("items"):
+            # Tag not found — try searching for the closest tag first
+            search_resp = requests.get(
+                "https://api.stackexchange.com/2.3/tags",
+                params={"site": "stackoverflow", "inname": tag, "pagesize": 1, "order": "desc", "sort": "popular"},
+            )
+            if search_resp.status_code == 200:
+                found = search_resp.json().get("items", [])
+                if found:
+                    tag = found[0]["name"]
+                    resp = requests.get(
+                        f"https://api.stackexchange.com/2.3/tags/{tag}/top-answerers/all_time",
+                        params={"site": "stackoverflow", "pagesize": min(max_results, 30)},
+                    )
+                    data = resp.json()
+                else:
+                    errors.append(skill)
+                    continue
+            time.sleep(0.2)
+
+        for item in data.get("items", []):
             uid = item["user"]["user_id"]
             if uid not in user_skills:
                 user_skills[uid] = {
@@ -90,7 +131,8 @@ def search_stackoverflow(skills, max_results=30):
             "location": data["location"],
         })
 
-    return candidates, None
+    warning = f"No Stack Overflow tag found for: {', '.join(errors)}" if errors else None
+    return candidates, warning
 
 
 # ── Google → LinkedIn ─────────────────────────────────────────────────────────
