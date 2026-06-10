@@ -128,17 +128,17 @@ def match_people_to_job(job_row, job_col, people_df):
 
 def save_results(results, job_title):
     safe = re.sub(r"[^\w\s-]", "", str(job_title)).strip().replace(" ", "_")
-    filename = f"matches_{safe}.xlsx"
+    output_path = Path(__file__).parent / f"matches_{safe}.xlsx"
     df = pd.DataFrame(results)
 
-    with pd.ExcelWriter(filename, engine="openpyxl") as writer:
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Ranked Candidates")
         ws = writer.sheets["Ranked Candidates"]
         for col in ws.columns:
             max_len = max((len(str(cell.value or "")) for cell in col), default=10)
             ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 60)
 
-    print(f"Saved: {filename}")
+    print(f"\nSaved: {output_path.resolve()}")
 
 
 def print_top(results, job_title, n=5):
