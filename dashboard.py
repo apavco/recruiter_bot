@@ -8,17 +8,26 @@ import streamlit as st
 
 from skills_matcher import (
     detect_columns,
+    get_model,
     load_config,
     match_people_to_job,
     parse_skills,
     save_config,
 )
 
+
+@st.cache_resource(show_spinner=False)
+def load_semantic_model():
+    return get_model()
+
 CONFIG_FILE = Path(__file__).parent / "config.json"
 
 st.set_page_config(page_title="Recruiter Bot", page_icon="🔍", layout="wide")
 st.title("🔍 Recruiter Bot")
 st.caption("Match candidates to job descriptions by skill overlap.")
+
+with st.spinner("Loading AI model (first run only)..."):
+    load_semantic_model()
 
 # ── Jobs file ────────────────────────────────────────────────────────────────
 st.header("1. Job Descriptions")
@@ -83,13 +92,22 @@ if jobs_df is not None:
 # ── Search ────────────────────────────────────────────────────────────────────
 st.header("4. Search")
 
-threshold = st.slider(
+col_a, col_b = st.columns(2)
+threshold = col_a.slider(
     "Minimum required skills match (%)",
     min_value=0,
     max_value=100,
     value=0,
     step=5,
     help="Only show candidates who meet or exceed this required skills match percentage.",
+)
+similarity = col_b.slider(
+    "Semantic similarity sensitivity",
+    min_value=0.30,
+    max_value=0.90,
+    value=0.55,
+    step=0.05,
+    help="How closely a candidate skill must match a job skill. Lower = more lenient, higher = stricter.",
 )
 
 search_clicked = st.button("🔍 Search Candidates", type="primary", disabled=(jobs_df is None or people_df is None))
@@ -103,7 +121,7 @@ if search_clicked:
 
     for _, row in jobs_to_run:
         title = row[job_col]
-        results = match_people_to_job(row, job_col, people_df)
+        results = match_people_to_job(row, job_col, people_df, threshold=similarity)
         results_df = pd.DataFrame(results)
 
         # Apply minimum threshold filter

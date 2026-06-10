@@ -3,8 +3,17 @@ import re
 import json
 from pathlib import Path
 
-
 CONFIG_FILE = Path(__file__).parent / "config.json"
+
+_model = None
+
+
+def get_model():
+    global _model
+    if _model is None:
+        from sentence_transformers import SentenceTransformer
+        _model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _model
 
 
 def load_config():
@@ -51,19 +60,28 @@ def parse_skills(value):
     return [s.strip().lower() for s in re.split(r"[,;|/]+", str(value)) if s.strip()]
 
 
-def skill_match(candidate_skills, job_skills):
+def skill_match(candidate_skills, job_skills, threshold=0.55):
+    if not candidate_skills or not job_skills:
+        return []
+
+    from sentence_transformers import util
+    model = get_model()
+
+    candidate_list = list(candidate_skills)
+    job_embeddings = model.encode(job_skills, convert_to_tensor=True)
+    candidate_embeddings = model.encode(candidate_list, convert_to_tensor=True)
+
     matched = []
-    for skill in job_skills:
-        s = skill.lower()
-        parts = s.split()
-        if any(all(p in cs for p in parts) or s in cs or cs in s for cs in candidate_skills):
-            matched.append(skill)
+    for i, job_skill in enumerate(job_skills):
+        scores = util.cos_sim(job_embeddings[i], candidate_embeddings)[0]
+        if scores.max().item() >= threshold:
+            matched.append(job_skill)
     return matched
 
 
-def score_person(candidate_skills, required_skills, ideal_skills):
-    req_matched = skill_match(candidate_skills, required_skills)
-    ideal_matched = skill_match(candidate_skills, ideal_skills)
+def score_person(candidate_skills, required_skills, ideal_skills, threshold=0.55):
+    req_matched = skill_match(candidate_skills, required_skills, threshold)
+    ideal_matched = skill_match(candidate_skills, ideal_skills, threshold)
 
     req_pct = round(len(req_matched) / len(required_skills) * 100, 1) if required_skills else 100.0
     ideal_pct = round(len(ideal_matched) / len(ideal_skills) * 100, 1) if ideal_skills else 0.0
@@ -95,7 +113,7 @@ def detect_columns(people_df):
     return name_col, skills_col
 
 
-def match_people_to_job(job_row, job_col, people_df):
+def match_people_to_job(job_row, job_col, people_df, threshold=0.55):
     required_skills = parse_skills(job_row.get("required_skills", ""))
     ideal_skills = parse_skills(job_row.get("ideal_skills", ""))
 
@@ -116,7 +134,7 @@ def match_people_to_job(job_row, job_col, people_df):
     results = []
     for _, row in people_df.iterrows():
         candidate_skills = set(parse_skills(row.get(skills_col, "")))
-        scores = score_person(candidate_skills, required_skills, ideal_skills)
+        scores = score_person(candidate_skills, required_skills, ideal_skills, threshold)
 
         record = {
             "% Required Match": scores["req_pct"],
