@@ -1,6 +1,20 @@
 import pandas as pd
 import re
+import json
 from pathlib import Path
+
+
+CONFIG_FILE = Path(__file__).parent / "config.json"
+
+
+def load_config():
+    if CONFIG_FILE.exists():
+        return json.loads(CONFIG_FILE.read_text())
+    return {}
+
+
+def save_config(config):
+    CONFIG_FILE.write_text(json.dumps(config, indent=2))
 
 
 def load_excel(path, label):
@@ -149,7 +163,21 @@ def print_top(results, job_title, n=5):
 
 def main():
     print("=== Skills Matcher ===\n")
-    jobs_path = input("Path to job descriptions Excel file: ").strip().strip('"')
+    config = load_config()
+
+    saved_jobs_path = config.get("jobs_path")
+    if saved_jobs_path and Path(saved_jobs_path).exists():
+        print(f"Using saved jobs file: {saved_jobs_path}")
+        change = input("Press Enter to keep it, or type a new path to change it: ").strip().strip('"')
+        jobs_path = change if change else saved_jobs_path
+    else:
+        jobs_path = input("Path to job descriptions Excel file: ").strip().strip('"')
+
+    if jobs_path != saved_jobs_path and Path(jobs_path).exists():
+        config["jobs_path"] = jobs_path
+        save_config(config)
+        print(f"Jobs file saved to config for future runs.")
+
     people_path = input("Path to people/skills Excel file:   ").strip().strip('"')
 
     jobs_df = load_excel(jobs_path, "jobs")
