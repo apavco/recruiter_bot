@@ -67,14 +67,12 @@ def score_person(candidate_skills, required_skills, ideal_skills):
 
     req_pct = round(len(req_matched) / len(required_skills) * 100, 1) if required_skills else 100.0
     ideal_pct = round(len(ideal_matched) / len(ideal_skills) * 100, 1) if ideal_skills else 0.0
-    combined = round(req_pct * 0.7 + ideal_pct * 0.3, 1) if ideal_skills else req_pct
 
     return {
         "req_matched": ", ".join(req_matched),
         "ideal_matched": ", ".join(ideal_matched),
         "req_pct": req_pct,
         "ideal_pct": ideal_pct,
-        "combined": combined,
     }
 
 
@@ -121,7 +119,6 @@ def match_people_to_job(job_row, job_col, people_df):
         scores = score_person(candidate_skills, required_skills, ideal_skills)
 
         record = {
-            "Combined Score (%)": scores["combined"],
             "% Required Match": scores["req_pct"],
             "% Ideal Match": scores["ideal_pct"] if ideal_skills else "N/A",
             "Name": row.get(name_col, ""),
@@ -137,7 +134,7 @@ def match_people_to_job(job_row, job_col, people_df):
 
         results.append(record)
 
-    return sorted(results, key=lambda x: x["Combined Score (%)"], reverse=True)
+    return sorted(results, key=lambda x: x["% Required Match"], reverse=True)
 
 
 def save_results(results, job_title):
@@ -158,7 +155,7 @@ def save_results(results, job_title):
 def print_top(results, job_title, n=5):
     print(f"\nTop {min(n, len(results))} matches for '{job_title}':")
     for r in results[:n]:
-        print(f"  {str(r['Name']):30s}  {r['Combined Score (%)']:5.1f}%  matched: {r['Required Skills Matched'] or '(none)'}")
+        print(f"  {str(r['Name']):30s}  req: {r['% Required Match']:5.1f}%  ideal: {r['% Ideal Match']}  matched: {r['Required Skills Matched'] or '(none)'}")
 
 
 def main():

@@ -83,6 +83,15 @@ if jobs_df is not None:
 # ── Search ────────────────────────────────────────────────────────────────────
 st.header("4. Search")
 
+threshold = st.slider(
+    "Minimum required skills match (%)",
+    min_value=0,
+    max_value=100,
+    value=0,
+    step=5,
+    help="Only show candidates who meet or exceed this required skills match percentage.",
+)
+
 search_clicked = st.button("🔍 Search Candidates", type="primary", disabled=(jobs_df is None or people_df is None))
 
 if search_clicked:
@@ -97,19 +106,20 @@ if search_clicked:
         results = match_people_to_job(row, job_col, people_df)
         results_df = pd.DataFrame(results)
 
+        # Apply minimum threshold filter
+        results_df = results_df[results_df["% Required Match"] >= threshold].reset_index(drop=True)
+
         st.subheader(f"Results — {title}")
 
         req_skills = parse_skills(row.get("required_skills", ""))
         ideal_skills = parse_skills(row.get("ideal_skills", ""))
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Candidates scored", len(results_df))
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Candidates shown", len(results_df))
         col2.metric("Required skills", len(req_skills))
         col3.metric("Ideal skills", len(ideal_skills))
+        col4.metric("Min threshold", f"{threshold}%")
 
-        st.dataframe(
-            results_df.style.background_gradient(subset=["Combined Score (%)"], cmap="RdYlGn"),
-            use_container_width=True,
-        )
+        st.dataframe(results_df, use_container_width=True)
 
         # Download button
         buf = io.BytesIO()
