@@ -1,7 +1,10 @@
 import time
 import re
+import json
+import argparse
 import requests
 import pandas as pd
+from pathlib import Path
 
 
 # ── GitHub ────────────────────────────────────────────────────────────────────
@@ -186,3 +189,67 @@ def build_candidates_df(sourced_lists):
     df = pd.DataFrame(all_candidates)
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
     return df.drop_duplicates(subset=["name", "source"]).reset_index(drop=True)
+
+
+# ── CLI entry point (called by the Claude skill) ──────────────────────────────
+
+def extract_keywords_from_jd(jd_text):
+    # Pull meaningful words from the JD as search terms — Claude will do deeper inference later
+    stopwords = {
+        "the", "and", "for", "with", "will", "have", "this", "that", "are", "you",
+        "our", "your", "from", "about", "they", "their", "experience", "ability",
+        "strong", "work", "team", "role", "must", "also", "well", "good", "using",
+        "we", "a", "an", "in", "to", "of", "or", "is", "be", "as", "at", "on",
+    }
+    words = re.findall(r"\b[a-zA-Z][a-zA-Z0-9\+\#\.]{2,}\b", jd_text)
+    seen, keywords = set(), []
+    for w in words:
+        lw = w.lower()
+        if lw not in stopwords and lw not in seen:
+            seen.add(lw)
+            keywords.append(w)
+    return keywords[:10]
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--jd", required=True, help="Full job description text")
+    parser.add_argument("--github-token", default="", help="GitHub personal access token")
+    parser.add_argument("--max-results", type=int, default=20)
+    args = parser.parse_args()
+
+    keywords = extract_keywords_from_jd(args.jd)
+    print(f"Extracted search terms: {keywords}")
+
+    all_candidates = []
+
+    print("Searching GitHub...")
+    gh_results, gh_err = search_github(keywords, args.github_token, args.max_results)
+    if gh_err:
+        print(f"GitHub warning: {gh_err}")
+    else:
+        print(f"GitHub: {len(gh_results)} candidates found")
+        all_candidates.extend(gh_results)
+
+    print("Searching Stack Overflow...")
+    so_results, so_err = search_stackoverflow(keywords, args.max_results)
+    if so_err:
+        print(f"Stack Overflow warning: {so_err}")
+    else:
+        print(f"Stack Overflow: {len(so_results)} candidates found")
+        all_candidates.extend(so_results)
+
+    # Deduplicate
+    seen_keys = set()
+    unique = []
+    for c in all_candidates:
+        key = (c.get("name", "").lower(), c.get("source", ""))
+        if key not in seen_keys:
+            seen_keys.add(key)
+            unique.append(c)
+
+    output_path = Path(__file__).parent / "sourced_candidates.json"
+    with open(output_path, "w") as f:
+        json.dump({"job_description": args.jd, "candidates": unique}, f, indent=2)
+
+    print(f"\nSaved {len(unique)} candidates to {output_path}")
