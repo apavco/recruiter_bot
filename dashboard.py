@@ -243,3 +243,54 @@ if search_clicked:
             file_name=f"matches_{safe}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+# ── Skill Results Import ───────────────────────────────────────────────────────
+st.divider()
+st.header("Skill Results — /find-candidates")
+st.caption("Candidates sourced by the Claude skill are automatically shown here.")
+
+SOURCED_JSON = Path(__file__).parent / "sourced_candidates.json"
+REPORT_XLSX  = Path(__file__).parent / "candidates_report.xlsx"
+
+if SOURCED_JSON.exists():
+    with open(SOURCED_JSON) as f:
+        skill_data = json.load(f)
+
+    candidates = skill_data.get("candidates", [])
+    jd_preview = skill_data.get("job_description", "")[:300]
+
+    if jd_preview:
+        with st.expander("Job description used"):
+            st.write(jd_preview + ("..." if len(skill_data.get("job_description", "")) > 300 else ""))
+
+    if candidates:
+        skill_df = pd.DataFrame(candidates)
+        skill_df.columns = [c.replace("_", " ").title() for c in skill_df.columns]
+
+        st.metric("Candidates found", len(skill_df))
+        st.dataframe(skill_df, use_container_width=True)
+
+        # Download the skill Excel report if it exists
+        if REPORT_XLSX.exists():
+            with open(REPORT_XLSX, "rb") as f:
+                st.download_button(
+                    label="⬇️ Download candidates_report.xlsx",
+                    data=f.read(),
+                    file_name="candidates_report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+        else:
+            # Let the user download the raw data as Excel
+            buf = io.BytesIO()
+            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+                skill_df.to_excel(writer, index=False, sheet_name="Skill Candidates")
+            st.download_button(
+                label="⬇️ Download skill_candidates.xlsx",
+                data=buf.getvalue(),
+                file_name="skill_candidates.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+    else:
+        st.info("No candidates in the last skill run.")
+else:
+    st.info("No skill results yet. Run /find-candidates in Claude Code to populate this table.")
