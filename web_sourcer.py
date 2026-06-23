@@ -213,18 +213,34 @@ def extract_keywords_from_jd(jd_text):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--jd", required=True, help="Full job description text")
+    parser.add_argument("--jd", default="", help="Full job description text")
+    parser.add_argument("--jd-from-config", action="store_true", help="Load JD from dashboard config.json")
     parser.add_argument("--github-token", default="", help="GitHub personal access token")
     parser.add_argument("--max-results", type=int, default=20)
     args = parser.parse_args()
 
-    keywords = extract_keywords_from_jd(args.jd)
+    config_path = Path(__file__).parent / "config.json"
+    config = json.loads(config_path.read_text()) if config_path.exists() else {}
+
+    if args.jd_from_config:
+        jd_text = config.get("job_description", "")
+        if not jd_text:
+            print("ERROR: No job description found in config.json. Please paste it into the dashboard first.")
+            exit(1)
+    else:
+        jd_text = args.jd
+        if not jd_text:
+            print("ERROR: Provide --jd or --jd-from-config.")
+            exit(1)
+
+    github_token = args.github_token or config.get("github_token", "")
+    keywords = extract_keywords_from_jd(jd_text)
     print(f"Extracted search terms: {keywords}")
 
     all_candidates = []
 
     print("Searching GitHub...")
-    gh_results, gh_err = search_github(keywords, args.github_token, args.max_results)
+    gh_results, gh_err = search_github(keywords, github_token, args.max_results)
     if gh_err:
         print(f"GitHub warning: {gh_err}")
     else:
@@ -250,6 +266,6 @@ if __name__ == "__main__":
 
     output_path = Path(__file__).parent / "sourced_candidates.json"
     with open(output_path, "w") as f:
-        json.dump({"job_description": args.jd, "candidates": unique}, f, indent=2)
+        json.dump({"job_description": jd_text, "candidates": unique}, f, indent=2)
 
     print(f"\nSaved {len(unique)} candidates to {output_path}")

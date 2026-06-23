@@ -35,8 +35,26 @@ st.caption("Match candidates to job descriptions by skill overlap.")
 with st.spinner("Loading AI model (first run only)..."):
     load_semantic_model()
 
+# ── Job Description Input ─────────────────────────────────────────────────────
+st.header("1. Job Description")
+st.caption("Paste the full job description here. It will be saved and used automatically when you run /find-candidates in Claude Code.")
+
+saved_jd = config.get("job_description", "")
+job_description = st.text_area(
+    "Job Description",
+    value=saved_jd,
+    height=200,
+    placeholder="Paste the full job description here...",
+    label_visibility="collapsed",
+)
+
+if job_description and job_description != saved_jd:
+    config["job_description"] = job_description
+    save_config(config)
+    st.success("Job description saved — ready for /find-candidates.")
+
 # ── Jobs file ────────────────────────────────────────────────────────────────
-st.header("1. Job Descriptions")
+st.header("2. Job Descriptions File (for skill matching)")
 
 config = load_config()
 saved_jobs_path = config.get("jobs_path", "")
@@ -70,7 +88,7 @@ if jobs_source == "Upload a new file":
         st.success(f"Saved as default: {save_path}")
 
 # ── Candidates file ───────────────────────────────────────────────────────────
-st.header("2. Candidates / Skills")
+st.header("3. Candidates / Skills")
 
 people_df = None
 people_upload = st.file_uploader("Upload candidates Excel file (optional if using web sourcing)", type=["xlsx", "xls"], key="people")
@@ -80,7 +98,7 @@ if people_upload:
     st.success(f"Loaded {len(people_df)} candidates.")
 
 # ── Web sourcing ──────────────────────────────────────────────────────────────
-st.header("3. Source Candidates from Web (optional)")
+st.header("4. Source Candidates from Web (optional)")
 
 use_web = st.toggle("Enable web sourcing")
 
@@ -127,7 +145,7 @@ if use_web:
             save_config(config)
 
 # ── Job selector ──────────────────────────────────────────────────────────────
-st.header("4. Select Job")
+st.header("5. Select Job")
 
 job_row = None
 job_col = None
@@ -143,7 +161,7 @@ if jobs_df is not None:
         job_row = jobs_df[jobs_df[job_col] == selected].iloc[0]
 
 # ── Search ────────────────────────────────────────────────────────────────────
-st.header("5. Search")
+st.header("6. Search")
 
 col_a, col_b = st.columns(2)
 threshold = col_a.slider(

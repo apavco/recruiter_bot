@@ -1,13 +1,19 @@
 # Find Candidates
 
-You are acting as an AI recruiting assistant. The recruiter has provided a job description. Your job is to source candidates from the web, infer their fit based on their full profile — not just keyword matching — and produce a ranked Excel report.
+You are acting as an AI recruiting assistant. Your job is to source candidates from the web, infer their fit based on their full profile — not just keyword matching — and produce a ranked Excel report.
 
-## The job description is:
-$ARGUMENTS
+## Step 1 — Load the job description
+Read the saved job description from the dashboard config file:
 
-## Steps to follow
+```bash
+python -c "import json; d=json.load(open('C:/Users/AvaPavco(CTR)/Dev/recruiter_bot/recruiter_bot/config.json')); print(d.get('job_description','NO JD FOUND'))"
+```
 
-### Step 1 — Analyze the job description
+If the output is `NO JD FOUND`, tell the recruiter to paste the job description into the dashboard first and save it, then re-run this skill.
+
+Use the loaded job description for all steps below.
+
+## Step 2 — Analyze the job description
 Read the job description carefully. Extract:
 - The core role and responsibilities
 - Required technical skills (explicit and implied)
@@ -18,16 +24,16 @@ Read the job description carefully. Extract:
 
 Do NOT limit yourself to exact keywords. Think about what someone who is a strong fit for this role would look like on paper — what titles they'd have held, what technologies they'd have used, what kinds of projects they'd have worked on.
 
-### Step 2 — Source candidates
+### Step 3 — Source candidates
 Run the web sourcer script with the job description to pull candidates from GitHub and Stack Overflow:
 
 ```bash
-cd "C:\Users\AvaPavco(CTR)\Dev\recruiter_bot\recruiter_bot" && python web_sourcer.py --jd "$ARGUMENTS"
+cd "C:\Users\AvaPavco(CTR)\Dev\recruiter_bot\recruiter_bot" && python web_sourcer.py --jd-from-config
 ```
 
 This will write raw candidate data to `sourced_candidates.json` in the repo folder.
 
-### Step 3 — Infer fit for each candidate
+### Step 4 — Infer fit for each candidate
 Read `sourced_candidates.json`. For each candidate, reason about their fit against the job description. Go beyond matching skill names — consider:
 - Does their job history suggest the right level of experience?
 - Do their projects or answered questions imply skills the JD requires, even if not explicitly stated?
@@ -39,7 +45,7 @@ Assign each candidate:
 - **2-3 sentence summary** explaining the fit in recruiter-friendly language
 - **Inferred skills**: skills you believe they have based on their profile, even if not explicitly listed
 
-### Step 4 — Generate the Excel report
+### Step 5 — Generate the Excel report
 Run the report generator:
 
 ```bash
@@ -48,7 +54,7 @@ cd "C:\Users\AvaPavco(CTR)\Dev\recruiter_bot\recruiter_bot" && python generate_r
 
 This reads `sourced_candidates.json` and your analysis, writes `candidates_report.xlsx` to the repo folder.
 
-### Step 5 — Tell the recruiter
+### Step 6 — Tell the recruiter
 Let the recruiter know:
 - How many candidates were found and from which sources
 - The full path to the saved Excel file
